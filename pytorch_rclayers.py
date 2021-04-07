@@ -78,7 +78,8 @@ class RegToIrrepConv(torch.nn.Module):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = create_xavier_convparameter(shape=(self.filters, self.input_dim, self.kernel_size // 2))
+        if self.kernel_size > 1:
+            self.left_kernel = create_xavier_convparameter(shape=(self.filters, self.input_dim, self.kernel_size // 2))
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
         if self.kernel_size % 2 == 1:
@@ -111,7 +112,7 @@ class RegToIrrepConv(torch.nn.Module):
                 else:
                     kernel = bottom
             elif self.b_out == 0:
-                top_right = torch.flip(self.bottom_right, [1])
+                top_right = torch.flip(self.top_left, [1])
                 top = torch.cat((self.top_left, top_right), dim=1)
                 if self.kernel_size > 1:
                     kernel = torch.cat((self.left_kernel, top, right_kernel), dim=2)
@@ -184,14 +185,14 @@ class IrrepToRegConv(torch.nn.Module):
                 top_right = - torch.flip(self.bottom_right, [0])
                 right = torch.cat((top_right, self.bottom_right), dim=0)
                 if self.kernel_size > 1:
-                    kernel = torch.cat((self.left_kernel, right, right_kernel), dim=0)
+                    kernel = torch.cat((self.left_kernel, right, right_kernel), dim=2)
                 else:
                     kernel = right
             elif self.b_in == 0:
                 bottom_left = torch.flip(self.top_left, [0])
                 left = torch.cat((self.top_left, bottom_left), dim=0)
                 if self.kernel_size > 1:
-                    kernel = torch.cat((self.left_kernel, left, right_kernel), dim=0)
+                    kernel = torch.cat((self.left_kernel, left, right_kernel), dim=2)
                 else:
                     kernel = left
             else:
@@ -324,13 +325,13 @@ class IrrepToIrrepConv(torch.nn.Module):
             if self.b_in == 0:
                 # going from as -> bs
                 if self.a_out == 0:
-                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1))
+                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
                 # going from as -> as
                 elif self.b_out == 0:
                     center_kernel = self.top_left
                 # going from as -> abs
                 else:
-                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1))
+                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
                     center_kernel = torch.cat((self.top_left, bottom_left), dim=0)
 
             # We only have the right part
@@ -341,10 +342,10 @@ class IrrepToIrrepConv(torch.nn.Module):
                     center_kernel = self.bottom_right
                 # going from bs -> as
                 elif self.b_out == 0:
-                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1))
+                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
                 # going from bs -> abs
                 else:
-                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1))
+                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
                     center_kernel = torch.cat((top_right, self.bottom_right), dim=0)
 
             # in <=> left/right, out <=> top/bottom
@@ -357,10 +358,10 @@ class IrrepToIrrepConv(torch.nn.Module):
                     center_kernel = self.bottom_right
                 # going from as -> bs
                 elif self.b_in == 0:
-                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1))
+                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
                 # going from abs -> bs
                 else:
-                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1))
+                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
                     center_kernel = torch.cat((bottom_left, self.bottom_right), dim=1)
 
             # We only have the top
@@ -368,19 +369,19 @@ class IrrepToIrrepConv(torch.nn.Module):
             elif self.b_out == 0:
                 # going from bs -> as
                 if self.a_in == 0:
-                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1))
+                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
                 # going from as -> as
                 elif self.b_in == 0:
                     center_kernel = self.top_left
                 # going from abs -> as
                 else:
-                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1))
+                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
                     center_kernel = torch.cat((self.top_left, top_right), dim=1)
 
             else:
                 # For the kernel to be anti-symmetric, we need to have zeros on the anti-symmetric parts:
-                bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1))
-                top_right = torch.zeros(size=(self.a_out, self.b_in, 1))
+                bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
+                top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
                 left = torch.cat((self.top_left, bottom_left), dim=0)
                 right = torch.cat((top_right, self.bottom_right), dim=0)
                 center_kernel = torch.cat((left, right), dim=1)
@@ -390,7 +391,6 @@ class IrrepToIrrepConv(torch.nn.Module):
                 kernel = center_kernel
         else:
             kernel = torch.cat((self.left_kernel, right_kernel), dim=2)
-
         outputs = torch.nn.functional.conv1d(inputs,
                                              kernel,
                                              padding=self.padding,
@@ -409,18 +409,18 @@ class IrrepActivationLayer(torch.nn.Module):
         self.b = b
         self.placeholder = placeholder
 
-    def call(self, inputs):
+    def forward(self, inputs):
         if self.placeholder:
             return inputs
         a_outputs = None
         if self.a > 0:
-            a_inputs = inputs[:, :, :self.a]
+            a_inputs = inputs[:, :self.a, :]
             a_outputs = torch.relu(a_inputs)
         if self.b > 0:
-            b_inputs = inputs[:, :, self.a:]
+            b_inputs = inputs[:, self.a:, :]
             b_outputs = torch.tanh(b_inputs)
             if a_outputs is not None:
-                return torch.cat((a_outputs, b_outputs), dim=-1)
+                return torch.cat((a_outputs, b_outputs), dim=1)
             else:
                 return b_outputs
         return a_outputs
@@ -726,6 +726,122 @@ def b_action(sequence_tensor):
     :return: the modified tensor
     """
     return -torch.flip(sequence_tensor, [2])
+
+
+def random_one_hot(size=(2, 100)):
+    """
+    This is copied from the keras use case, so we have to flip the data in the end
+    The output has shape (batch, features, num_nucleotides)
+    :param size:
+    :return:
+    """
+    bs, len = size
+    numel = bs * len
+    randints_np = np.random.randint(0, 3, size=numel)
+    one_hot_np = np.eye(4)[randints_np]
+    one_hot_np = np.reshape(one_hot_np, newshape=(bs, len, 4))
+    one_hot_torch = torch.from_numpy(one_hot_np)
+    one_hot_torch = torch.transpose(one_hot_torch, 1, 2)
+    one_hot_torch.requires_grad = False
+    return one_hot_torch
+
+
+def test_layers(a_1=2,
+                b_1=1,
+                a_2=2,
+                b_2=3,
+                reg_out=3,
+                k_1=1,
+                k_2=1,
+                k_3=1,
+                k_4=1):
+    x = random_one_hot(size=(1, 40))
+    rcx = torch.flip(x, [1, 2])
+
+    regreg = RegToRegConv(reg_in=2, reg_out=reg_out, kernel_size=k_1, dilatation=1, padding=0)
+    concat_reg = RegConcatLayer(reg=reg_out)
+    regirrep = RegToIrrepConv(reg_in=reg_out, a_out=a_1, b_out=b_1, kernel_size=k_2, dilatation=1, padding=0)
+    irrepirrep = IrrepToIrrepConv(a_in=a_1, b_in=b_1, a_out=a_2, b_out=b_2, kernel_size=k_3, dilatation=1, padding=0)
+    activ = IrrepActivationLayer(a=a_2, b=b_2)
+    irrepreg = IrrepToRegConv(a_in=a_2, b_in=b_2, reg_out=1, kernel_size=k_4, dilatation=1, padding=0)
+    concat_irrep = IrrepConcatLayer(a=a_2, b=b_2)
+
+    with torch.no_grad():
+        out = regreg(x)
+        rc_out = regreg(rcx)
+        # print(out.shape)
+        assert torch.allclose(out, reg_action(rc_out))
+
+        concat_reg_out = concat_reg(out)
+        rc_concat_reg_out = concat_reg(rc_out)
+        assert torch.allclose(concat_reg_out, rc_concat_reg_out)
+
+        out = regirrep(out)
+        rc_out = regirrep(rc_out)
+        assert torch.allclose(out[:, :a_1], a_action(rc_out[:, :a_1]))
+        assert torch.allclose(out[:, a_1:], b_action(rc_out[:, a_1:]))
+
+        out = irrepirrep(out)
+        rc_out = irrepirrep(rc_out)
+        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]))
+        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]))
+
+        out = activ(out)
+        rc_out = activ(rc_out)
+        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]))
+        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]))
+
+        concat_irrep_out = concat_irrep(out)
+        rc_concat_irrep_out = concat_irrep(rc_out)
+        assert torch.allclose(concat_irrep_out, rc_concat_irrep_out)
+
+        out = irrepreg(out)
+        rc_out = irrepreg(rc_out)
+        assert torch.allclose(out, reg_action(rc_out))
+
+
+def test_kmers(k):
+    tokmer = ToKmerLayer(k)
+    x = random_one_hot(size=(1, 40))
+    rcx = torch.flip(x, [1, 2])
+    kmer_x = tokmer(x)
+    kmer_rcx = tokmer(rcx)
+    # Should be full ones with a few 2 because of palindromic representation.
+    # print(kmer_x.sum(axis=1))
+    # The flipped version should revert correctly
+    assert torch.allclose(kmer_x, reg_action(kmer_rcx))
+
+
+def test_all():
+    from tqdm import tqdm
+    import itertools
+    a_1 = range(0, 2)
+    b_1 = range(0, 2)
+    a_2 = range(0, 2)
+    b_2 = range(0, 2)
+    reg_out = range(1, 3)
+    k_1 = range(1, 4)
+    k_2 = range(1, 4)
+    k_3 = range(1, 4)
+    k_4 = range(1, 4)
+    kmers = range(1, 4)
+
+    settings_to_test = itertools.product(a_1, b_1, a_2, b_2, reg_out, k_1, k_2, k_3, k_4)
+    for elt in tqdm(settings_to_test, total=2592):
+        a_1, b_1, a_2, b_2, reg_out, k_1, k_2, k_3, k_4 = elt
+        if a_1 == 0 and b_1 == 0:
+            continue
+        if a_2 == 0 and b_2 == 0:
+            continue
+        try:
+            test_layers(*elt)
+        except RuntimeError:
+            print(elt)
+            raise RuntimeError
+    for k in kmers:
+        test_kmers(k=k)
+
+    print("All layers passed the tests")
 
 
 # class EquiNetBinary:
@@ -1294,78 +1410,5 @@ if __name__ == '__main__':
     np.random.seed(curr_seed)
     torch.random.manual_seed(curr_seed)
 
+    test_all()
 
-    def random_one_hot(size=(2, 100)):
-        """
-        This is copied from the keras use case, so we have to flip the data in the end
-        The output has shape (batch, features, num_nucleotides)
-        :param size:
-        :return:
-        """
-        bs, len = size
-        numel = bs * len
-        randints_np = np.random.randint(0, 3, size=numel)
-        one_hot_np = np.eye(4)[randints_np]
-        one_hot_np = np.reshape(one_hot_np, newshape=(bs, len, 4))
-        one_hot_torch = torch.from_numpy(one_hot_np)
-        one_hot_torch = torch.transpose(one_hot_torch, 1, 2)
-        one_hot_torch.requires_grad = False
-        return one_hot_torch
-
-
-    x = random_one_hot(size=(1, 40))
-    rcx = torch.flip(x, [1, 2])
-    # print(x.shape)
-
-    a_1 = 2
-    b_1 = 1
-    a_2 = 2
-    b_2 = 1
-    reg_out = 3
-
-    regreg = RegToRegConv(reg_in=2, reg_out=reg_out, kernel_size=5, dilatation=1, padding=0)
-    concat_reg = RegConcatLayer(reg=reg_out)
-    regirrep = RegToIrrepConv(reg_in=reg_out, a_out=a_1, b_out=b_1, kernel_size=5, dilatation=1, padding=0)
-    irrepirrep = IrrepToIrrepConv(a_in=a_1, b_in=b_1, a_out=a_2, b_out=b_2, kernel_size=5, dilatation=1, padding=0)
-    irrepreg = IrrepToRegConv(a_in=a_2, b_in=b_2, reg_out=1, kernel_size=5, dilatation=1, padding=0)
-    concat_irrep = IrrepConcatLayer(a=a_2, b=b_2)
-
-    with torch.no_grad():
-        out = regreg(x)
-        rc_out = regreg(rcx)
-        # print(out.shape)
-        assert torch.allclose(out, reg_action(rc_out))
-
-        concat_reg_out = concat_reg(out)
-        rc_concat_reg_out = concat_reg(rc_out)
-        assert torch.allclose(concat_reg_out, rc_concat_reg_out)
-
-        out = regirrep(out)
-        rc_out = regirrep(rc_out)
-        assert torch.allclose(out[:, :a_1], a_action(rc_out[:, :a_1]))
-        assert torch.allclose(out[:, a_1:], b_action(rc_out[:, a_1:]))
-
-        out = irrepirrep(out)
-        rc_out = irrepirrep(rc_out)
-        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]))
-        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]))
-
-        concat_irrep_out = concat_irrep(out)
-        rc_concat_irrep_out = concat_irrep(rc_out)
-        assert torch.allclose(concat_irrep_out, rc_concat_irrep_out)
-
-        out = irrepreg(out)
-        rc_out = irrepreg(rc_out)
-        assert torch.allclose(out, reg_action(rc_out))
-
-        # print(out)
-        # print(rcout2)
-
-        # TEST K-MER
-        tokmer = ToKmerLayer(2)
-        kmer_x = tokmer(x)
-        kmer_rcx = tokmer(rcx)
-        # Should be full ones with a few 2 because of palindromic representation.
-        # print(kmer_x.sum(axis=1))
-        # The flipped version should revert correctly
-        assert torch.allclose(kmer_x, reg_action(kmer_rcx))

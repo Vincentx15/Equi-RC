@@ -107,7 +107,8 @@ class RegToIrrepConv(Layer):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+        if self.kernel_size > 1:
+            self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
                                            name='left_kernel')
 
