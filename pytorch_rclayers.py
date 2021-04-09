@@ -1,8 +1,13 @@
-import torch
 import numpy as np
+import torch
 
 
 def create_xavier_convparameter(shape):
+    """
+    Small util function to create and initialize parameters in a custom layer.
+    :param shape:
+    :return:
+    """
     tensor = torch.zeros(size=shape, dtype=torch.double)
     torch.nn.init.xavier_normal_(tensor, gain=1.0)
     return torch.nn.Parameter(tensor)
@@ -61,7 +66,7 @@ class RegToRegConv(torch.nn.Module):
 
 class RegToIrrepConv(torch.nn.Module):
     """
-    Mapping from one irrep layer to another
+    Mapping from one regular layer to an irrep one
     """
 
     def __init__(self, reg_in, a_out, b_out, kernel_size,
@@ -139,7 +144,7 @@ class RegToIrrepConv(torch.nn.Module):
 
 class IrrepToRegConv(torch.nn.Module):
     """
-    Mapping from one irrep layer to another
+    Mapping from one irrep layer to a regular type one
     """
 
     def __init__(self, reg_out, a_in, b_in, kernel_size,
@@ -217,7 +222,7 @@ class IrrepToRegConv(torch.nn.Module):
 
 class IrrepToIrrepConv(torch.nn.Module):
     """
-    Mapping from one irrep layer to another
+    Mapping from one irrep layer to another irrep one
     """
 
     def __init__(self, a_in, a_out, b_in, b_out, kernel_size,
@@ -400,7 +405,7 @@ class IrrepToIrrepConv(torch.nn.Module):
 
 class IrrepActivationLayer(torch.nn.Module):
     """
-    BN layer for a_n, b_n feature map
+    Activation layer for a_n, b_n feature map
     """
 
     def __init__(self, a, b, placeholder=False):
@@ -532,8 +537,6 @@ class IrrepBatchNorm(torch.nn.Module):
                 mu_a_batch = torch.mean(a_inputs, dim=(0, 2))
                 sigma_a_batch = torch.std(a_inputs, dim=(0, 2)) + 0.0001
                 mu_a_batch, sigma_a_batch = mu_a_batch[None, :, None], sigma_a_batch[None, :, None]
-                # print('inbatch mu', mu_a_batch.numpy())
-                # print('inbatch sigma', sigma_a_batch.numpy())
                 train_a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
 
                 # Momentum version :
@@ -555,14 +558,6 @@ class IrrepBatchNorm(torch.nn.Module):
                 sigma_b_batch = numerator / torch.sqrt(division_over) + 0.0001
                 sigma_b_batch = sigma_b_batch[None, :, None]
                 train_b_outputs = b_inputs / sigma_b_batch * self.sigma_b
-
-                # Uncomment and call with RC batch to see that the mean is actually zero
-                # and the estimated std is the right one
-                # mu_b_batch = tf.reduce_mean(b_inputs, axis=(0, 1))
-                # sigma_b_batch_emp = tf.math.reduce_std(b_inputs, axis=(0, 1)) + 0.0001
-                # print('inbatch mu', mu_b_batch.numpy())
-                # print('inbatch sigma', sigma_b_batch_emp.numpy())
-                # print('computed sigman', sigma_b_batch.numpy())
 
                 # Momentum version
                 if self.use_momentum:
@@ -641,8 +636,15 @@ class RegConcatLayer(torch.nn.Module):
 
 class ToKmerLayer(torch.nn.Module):
     """
-        to go from 1-hot strand in regular representation to another one
-        """
+    To go from a one hot encoding of single nucleotides to one using k-mers one hot encoding.
+    This new encoding still can be acted upon using regular representation : symmetric kmers have a symmetric indexing
+    To do so, we build an ordered one hot pattern matching kernel, and use thresholding to get the one hot encoding.
+
+    Careful : the RC palindromic kmers (TA for instance) are encoded twice,
+    resulting in some dimensions having two ones activated.
+    However this avoids us having to make special cases and using '+1' type feature maps and
+    enables the use of just using regular representation on the output
+    """
 
     def __init__(self, k=3):
         super(ToKmerLayer, self).__init__()
@@ -735,8 +737,8 @@ def random_one_hot(size=(2, 100)):
     """
     This is copied from the keras use case, so we have to flip the data in the end
     The output has shape (batch, features, num_nucleotides)
-    :param size:
-    :return:
+    :param size: the size of first dimensions (batch_size, length)
+    :return: a one hot, nucleotide like tensor of shape (batch_size, 4, length)
     """
     bs, len = size
     numel = bs * len
@@ -758,6 +760,9 @@ def test_layers(a_1=2,
                 k_2=1,
                 k_3=1,
                 k_4=1):
+    """
+    Test the main layers by making a forward with a fixed layer parameters settings and checking equivariance
+    """
     x = random_one_hot(size=(1, 40))
     rcx = torch.flip(x, [1, 2])
 
@@ -772,7 +777,6 @@ def test_layers(a_1=2,
     with torch.no_grad():
         out = regreg(x)
         rc_out = regreg(rcx)
-        # print(out.shape)
         assert torch.allclose(out, reg_action(rc_out))
 
         concat_reg_out = concat_reg(out)
@@ -803,19 +807,34 @@ def test_layers(a_1=2,
         assert torch.allclose(out, reg_action(rc_out))
 
 
-def test_kmers(k):
+def test_kmers(k=2):
+    """
+    Test k-mers layers creation for a fixed value of k
+    :param k:
+    :return:
+    """
     tokmer = ToKmerLayer(k)
     x = random_one_hot(size=(1, 40))
     rcx = torch.flip(x, [1, 2])
     kmer_x = tokmer(x)
     kmer_rcx = tokmer(rcx)
     # Should be full ones with a few 2 because of palindromic representation.
-    # print(kmer_x.sum(axis=1))
+    assert torch.allclose(kmer_x.int(), kmer_x)
+    assert torch.any(torch.logical_and(3 > kmer_x.sum(axis=1), 0 < kmer_x.sum(axis=1)))
     # The flipped version should revert correctly
     assert torch.allclose(kmer_x, reg_action(kmer_rcx))
 
 
 def test_bn(a=2, b=2):
+    """
+    Test BN layers :
+
+    The test consists in checking everything runs and we get equivariant outputs.
+    One can also uncomment printing lines to see running means evolve in training mode and not in testing mode
+    :param a:
+    :param b:
+    :return:
+    """
     x = random_one_hot(size=(1, 10))
     rcx = torch.flip(x, [1, 2])
     bnreg = RegBatchNorm(reg_dim=2)
@@ -858,8 +877,16 @@ def test_bn(a=2, b=2):
 
 
 def test_all():
-    from tqdm import tqdm
+    """
+        Test all equivariant layers
+
+    Using itertools.product, we ensure that all combinations of layers are tested.
+    We then ensure that all outputs are equivariant.
+    :return:
+    """
     import itertools
+    import sys
+
     a_1 = range(0, 2)
     b_1 = range(0, 2)
     a_2 = range(0, 2)
@@ -877,7 +904,10 @@ def test_all():
 
     # Test Main Layers
     settings_to_test = itertools.product(a_1, b_1, a_2, b_2, reg_out, k_1, k_2, k_3, k_4)
-    for elt in tqdm(settings_to_test, total=2592):
+    for i, elt in enumerate(settings_to_test):
+        if not (i + 1) % 100 or i == 2591:
+            sys.stdout.write(f'{i + 1}/2592 tests passed for the main test\r')
+            sys.stdout.flush()
         a_1, b_1, a_2, b_2, reg_out, k_1, k_2, k_3, k_4 = elt
         if a_1 == 0 and b_1 == 0:
             continue
@@ -888,7 +918,7 @@ def test_all():
         except RuntimeError:
             print(elt)
             raise RuntimeError
-
+    print()
     # Test K-Mers
     for k in kmers:
         test_kmers(k=k)
@@ -897,6 +927,8 @@ def test_all():
     settings_to_test = itertools.product(bns_a, bns_b)
     for elt in settings_to_test:
         a, b = elt
+        if a == 0 and b == 0:
+            continue
         test_bn(a=a, b=b)
     print("All layers passed the tests")
 
@@ -908,5 +940,4 @@ if __name__ == '__main__':
     np.random.seed(curr_seed)
     torch.random.manual_seed(curr_seed)
 
-    test_bn()
-    # test_all()
+    test_all()
