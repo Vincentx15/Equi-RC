@@ -109,8 +109,8 @@ class RegToIrrepConv(Layer):
 
         if self.kernel_size > 1:
             self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
-                                           initializer=self.kernel_initializer,
-                                           name='left_kernel')
+                                               initializer=self.kernel_initializer,
+                                               name='left_kernel')
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
         if self.kernel_size % 2 == 1:
@@ -558,15 +558,25 @@ class RegBatchNorm(Layer):
         self.use_momentum = use_momentum
 
         if not placeholder:
-            self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
+            self.passed = self.add_weight(shape=([1]),
+                                          initializer="zeros",
+                                          name='passed',
+                                          trainable=False)
+            # self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
             self.mu = self.add_weight(shape=([reg_dim]),
                                       initializer="zeros",
                                       name='mu')
             self.sigma = self.add_weight(shape=([reg_dim]),
                                          initializer="ones",
                                          name='sigma')
-            self.running_mu = tf.Variable(initial_value=tf.zeros([reg_dim]), trainable=False)
-            self.running_sigma = tf.Variable(initial_value=tf.ones([reg_dim]), trainable=False)
+            self.running_mu = self.add_weight(shape=([reg_dim]),
+                                              initializer="ones",
+                                              name='running_mu')
+            self.running_sigma = self.add_weight(shape=([reg_dim]),
+                                                 initializer="ones",
+                                                 name='running_sigma')
+            # self.running_mu = tf.Variable(initial_value=tf.zeros([reg_dim]), trainable=False)
+            # self.running_sigma = tf.Variable(initial_value=tf.ones([reg_dim]), trainable=False)
 
     def call(self, inputs, **kwargs):
         if self.placeholder:
@@ -594,9 +604,14 @@ class RegBatchNorm(Layer):
                     self.passed + division_over)
             train_running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
                     self.passed + division_over)
-            self.passed = K.in_train_phase(self.passed + division_over, self.passed)
-        self.running_mu = K.in_train_phase(train_running_mu, self.running_mu)
-        self.running_sigma = K.in_train_phase(train_running_sigma, self.running_sigma)
+            train_passed = self.passed + division_over
+            conditioned_passed = K.in_train_phase(train_passed, self.passed)
+            self.add_update(K.update(self.passed, conditioned_passed), inputs)
+
+        conditioned_running_mu = K.in_train_phase(train_running_mu, self.running_mu)
+        conditioned_running_sigma = K.in_train_phase(train_running_sigma, self.running_sigma)
+        self.add_update(K.update(self.running_mu, conditioned_running_mu), inputs)
+        self.add_update(K.update(self.running_sigma, conditioned_running_sigma), inputs)
 
         train_true_normed_inputs = K.concatenate(
             tensors=[train_normed_inputs[:, :length, :],
@@ -612,7 +627,7 @@ class RegBatchNorm(Layer):
 
         out = K.in_train_phase(train_true_normed_inputs, test_true_normed_inputs)
         # out = K.in_train_phase(train_true_normed_inputs, 0 * test_true_normed_inputs)
-        # out = K.in_train_phase(0 * test_true_normed_inputs, train_true_normed_inputs)
+        # out = K.in_train_phase(0 * train_true_normed_inputs, test_true_normed_inputs)
         return out
 
     def compute_output_shape(self, input_shape):
@@ -633,7 +648,7 @@ class IrrepBatchNorm(Layer):
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False, use_momentum=True, momentum=0.99, **kwargs):
+    def __init__(self, a, b, placeholder=False, use_momentum=True, momentum=0.9, **kwargs):
         super(IrrepBatchNorm, self).__init__(**kwargs)
         self.a = a
         self.b = b
@@ -642,7 +657,11 @@ class IrrepBatchNorm(Layer):
         self.use_momentum = use_momentum
 
         if not placeholder:
-            self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
+            self.passed = self.add_weight(shape=([1]),
+                                          initializer="zeros",
+                                          name='passed',
+                                          trainable=False)
+            # self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
             if a > 0:
                 self.mu_a = self.add_weight(shape=([a]),
                                             initializer="zeros",
@@ -650,14 +669,26 @@ class IrrepBatchNorm(Layer):
                 self.sigma_a = self.add_weight(shape=([a]),
                                                initializer="ones",
                                                name='sigma_a')
-                self.running_mu_a = tf.Variable(initial_value=tf.zeros([a]), trainable=False)
-                self.running_sigma_a = tf.Variable(initial_value=tf.ones([a]), trainable=False)
+                self.running_mu_a = self.add_weight(shape=([a]),
+                                                    initializer="zeros",
+                                                    name='running_mu_a',
+                                                    trainable=False)
+                self.running_sigma_a = self.add_weight(shape=([a]),
+                                                       initializer="ones",
+                                                       name='running_sigma_a',
+                                                       trainable=False)
+                # self.running_mu_a = tf.Variable(initial_value=tf.zeros([a]), trainable=False)
+                # self.running_sigma_a = tf.Variable(initial_value=tf.ones([a]), trainable=False)
 
             if b > 0:
                 self.sigma_b = self.add_weight(shape=([b]),
                                                initializer="ones",
                                                name='sigma_a')
-                self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
+                self.running_sigma_b = self.add_weight(shape=([b]),
+                                                       initializer="ones",
+                                                       name='running_sigma_b',
+                                                       trainable=False)
+                # self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
     def call(self, inputs, **kwargs):
         if self.placeholder:
@@ -690,8 +721,15 @@ class IrrepBatchNorm(Layer):
                         self.passed + division_over)
                 train_running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
                         self.passed + division_over)
-            self.running_mu_a = K.in_train_phase(train_running_mu_a, self.running_mu_a)
-            self.running_sigma_a = K.in_train_phase(train_running_sigma_a, self.running_sigma_a)
+
+            conditioned_running_mu_a = K.in_train_phase(train_running_mu_a, self.running_mu_a)
+            conditioned_running_sigma_a = K.in_train_phase(train_running_sigma_a, self.running_sigma_a)
+            self.add_update(K.update(self.running_mu_a, conditioned_running_mu_a), inputs)
+            self.add_update(K.update(self.running_sigma_a, conditioned_running_sigma_a), inputs)
+            # self.add_update([K.moving_average_update(self.running_mu_a,
+            #                                          conditioned_result,
+            #                                          self.momentum)], inputs)
+            # self.running_sigma_a = K.in_train_phase(train_running_sigma_a, self.running_sigma_a)
 
         # For b_dims, the problem is that we cannot compute a std from the mean as we include as a prior
         # that the mean is zero
@@ -716,7 +754,8 @@ class IrrepBatchNorm(Layer):
             else:
                 train_running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
                         self.passed + division_over)
-            self.running_sigma_b = K.in_train_phase(train_running_sigma_b, self.running_sigma_b)
+            conditioned_running_sigma_b = K.in_train_phase(train_running_sigma_b, self.running_sigma_b)
+            self.add_update(K.update(self.running_sigma_b, conditioned_running_sigma_b), inputs)
 
             if train_a_outputs is not None:
                 train_outputs = K.concatenate((train_a_outputs, train_b_outputs), axis=-1)
@@ -725,7 +764,10 @@ class IrrepBatchNorm(Layer):
 
         else:
             train_outputs = train_a_outputs
-        self.passed = K.in_train_phase(self.passed + division_over, self.passed)
+
+        train_passed = self.passed + division_over
+        conditioned_passed = K.in_train_phase(train_passed, self.passed)
+        self.add_update(K.update(self.passed, conditioned_passed), inputs)
 
         # ============== Compute test values ====================
         test_a_outputs = None
@@ -745,9 +787,9 @@ class IrrepBatchNorm(Layer):
             test_outputs = test_a_outputs
 
         # By default, this value returns the test value for the eager mode.
-        # out = K.in_train_phase(0*train_outputs, test_outputs)
-        # out = K.in_train_phase(train_outputs, 0*test_outputs)
         out = K.in_train_phase(train_outputs, test_outputs)
+        # out = K.in_train_phase(train_outputs, 0*test_outputs)
+        # out = K.in_train_phase(train_outputs, test_outputs)
         return out
 
     def compute_output_shape(self, input_shape):
@@ -907,7 +949,8 @@ class EquiNetBinary:
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
-                 placeholder_bn=False):
+                 placeholder_bn=False,
+                 kmers=1):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
@@ -918,11 +961,15 @@ class EquiNetBinary:
         # successive_shrinking = (i - 1 for i in kernel_sizes)
         # self.input_dense = 1000 - sum(successive_shrinking)
 
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        reg_in = self.to_kmer.features // 2
+
         # First mapping goes from the input to an irrep feature space
         first_kernel_size = kernel_sizes[0]
         first_a, first_b = filters[0]
         self.last_a, self.last_b = filters[-1]
-        self.reg_irrep = RegToIrrepConv(reg_in=2,
+        self.reg_irrep = RegToIrrepConv(reg_in=reg_in,
                                         a_out=first_a,
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
@@ -945,18 +992,21 @@ class EquiNetBinary:
             ))
             self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
             # Don't add activation if it's the last layer
-            placeholder = (i == len(filters) - 1)
+            # placeholder = (i == len(filters) - 1)
+            # placeholder = True
             self.activation_layers.append(IrrepActivationLayer(a=next_a,
-                                                               b=next_b,
-                                                               placeholder=placeholder))
+                                                               b=next_b))
 
+        self.concat = IrrepConcatLayer(a=self.last_a, b=self.last_b)
         self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
         self.flattener = kl.Flatten()
         self.dense = kl.Dense(out_size, activation='sigmoid')
 
     def func_api_model(self):
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        x = self.reg_irrep(inputs)
+
+        x = self.to_kmer(inputs)
+        x = self.reg_irrep(x)
         x = self.first_bn(x)
         x = self.first_act(x)
 
@@ -966,7 +1016,7 @@ class EquiNetBinary:
             x = activation_layer(x)
 
         # Average two strands predictions, pool and go through Dense
-        x = IrrepConcatLayer(a=self.last_a, b=self.last_b)(x)
+        x = self.concat(x)
         x = self.pool(x)
         x = self.flattener(x)
         outputs = self.dense(x)
@@ -976,7 +1026,8 @@ class EquiNetBinary:
     def eager_call(self, inputs):
         rcinputs = inputs[:, ::-1, ::-1]
 
-        x = self.reg_irrep(inputs)
+        x = self.to_kmer(inputs)
+        x = self.reg_irrep(x)
         x = self.first_bn(x)
         x = self.first_act(x)
 
@@ -1008,8 +1059,8 @@ class EquiNetBinary:
         # print()
 
         # Average two strands predictions
-        x = IrrepConcatLayer(a=self.last_a, b=self.last_b)(x)
-        rcx = IrrepConcatLayer(a=self.last_a, b=self.last_b)(rcx)
+        x = self.concat(x)
+        rcx = self.concat(rcx)
 
         # print(x.numpy()[0, :5, :])
         # print('reversed')
@@ -1044,6 +1095,84 @@ class EquiNetBinary:
         # print()
         return outputs
 
+
+class CustomRCPS:
+
+    def __init__(self,
+                 filters=(16, 16, 16),
+                 kernel_sizes=(15, 14, 14),
+                 pool_size=40,
+                 pool_length=20,
+                 out_size=1,
+                 placeholder_bn=False,
+                 kmers=1):
+        """
+        First map the regular representation to irrep setting
+        Then goes from one setting to another.
+        """
+
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        reg_in = self.to_kmer.features // 2
+        filters = [reg_in] + list(filters)
+
+        # Now add the intermediate layer : sequence of conv, BN, activation
+        self.reg_layers = []
+        self.bn_layers = []
+        self.activation_layers = []
+        for i in range(len(filters) - 1):
+            prev_reg = filters[i]
+            next_reg = filters[i + 1]
+            self.reg_layers.append(RegToRegConv(
+                reg_in=prev_reg,
+                reg_out=next_reg,
+                kernel_size=kernel_sizes[i],
+            ))
+            self.bn_layers.append(RegBatchNorm(reg_dim=next_reg, placeholder=placeholder_bn))
+            # Don't add activation if it's the last layer
+            placeholder = (i == len(filters) - 1)
+            self.activation_layers.append(kl.core.Activation("relu"))
+
+        self.concat = RegConcatLayer(reg=filters[-1])
+        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
+        self.flattener = kl.Flatten()
+        self.dense = kl.Dense(out_size, activation='sigmoid')
+
+    def func_api_model(self):
+        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+
+        x = self.to_kmer(inputs)
+
+        for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
+            x = reg_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+        # Average two strands predictions, pool and go through Dense
+        x = self.concat(x)
+        x = self.pool(x)
+        x = self.flattener(x)
+        outputs = self.dense(x)
+        model = keras.Model(inputs, outputs)
+        return model
+
+    def eager_call(self, inputs):
+        x = self.to_kmer(inputs)
+        for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
+            x = reg_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+        # Average two strands predictions, pool and go through Dense
+        x = self.concat(x)
+        x = self.pool(x)
+        x = self.flattener(x)
+        outputs = self.dense(x)
+        model = keras.Model(inputs, outputs)
+        return model
+
+
+# BPNets
 
 # Loss Function
 def multinomial_nll(true_counts, logits):
@@ -1326,139 +1455,6 @@ class EquiNetBP(Layer):
         profile_out = self.last(concatenated)
 
         return count_out, profile_out
-
-
-class RCNetBinary:
-
-    def __init__(self,
-                 filters=(2, 2, 2),
-                 kernel_sizes=(5, 5, 7),
-                 pool_size=40,
-                 pool_length=20,
-                 out_size=1,
-                 placeholder_bn=False):
-        """
-        First map the regular representation to irrep setting
-        Then goes from one setting to another.
-        """
-
-        # First mapping goes from the input to an irrep feature space
-        first_kernel_size = kernel_sizes[0]
-        first_reg = filters[0]
-        self.last_reg = filters[-1]
-
-        self.first_conv = RegToRegConv(reg_in=2,
-                                       reg_out=first_reg,
-                                       kernel_size=first_kernel_size)
-        self.first_bn = RegBatchNorm(reg_dim=first_reg, placeholder=placeholder_bn)
-        self.first_act = kl.core.Activation("relu")
-
-        # Now add the intermediate layer : sequence of conv, BN, activation
-        self.irrep_layers = []
-        self.bn_layers = []
-        self.activation_layers = []
-        for i in range(1, len(filters)):
-            prev = filters[i - 1]
-            next = filters[i]
-            self.irrep_layers.append(RegToRegConv(
-                reg_in=prev,
-                reg_out=next,
-                kernel_size=kernel_sizes[i],
-            ))
-            self.bn_layers.append(RegBatchNorm(reg_dim=next, placeholder=placeholder_bn))
-            self.activation_layers.append(kl.core.Activation("relu"))
-
-        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
-        self.flattener = kl.Flatten()
-        self.dense = kl.Dense(out_size, activation='sigmoid')
-
-    def func_api_model(self):
-        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        x = self.first_conv(inputs)
-        x = self.first_bn(x)
-        x = self.first_act(x)
-
-        for conv_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
-            x = conv_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-        # Average two strands predictions, pool and go through Dense
-        x = RegConcatLayer(reg=self.last_reg)(x)
-        x = self.pool(x)
-        x = self.flattener(x)
-        outputs = self.dense(x)
-        model = keras.Model(inputs, outputs)
-        return model
-
-    def eager_call(self, inputs):
-        rcinputs = inputs[:, ::-1, ::-1]
-
-        x = self.first_conv(inputs)
-        x = self.first_bn(x)
-        x = self.first_act(x)
-
-        rcx = self.first_conv(rcinputs)
-        rcx = self.first_bn(rcx)
-        rcx = self.first_act(rcx)
-
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        # print()
-
-        for conv_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
-            x = conv_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-            rcx = conv_layer(rcx)
-            rcx = bn_layer(rcx)
-            rcx = activation_layer(rcx)
-
-        # Print the beginning of both strands to see it adds up in concat
-        # print(x.shape)
-        # print(x.numpy()[0, :5, :])
-        # print('end')
-        # print(rcx.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
-
-        # Average two strands predictions
-        x = RegConcatLayer(reg=self.last_reg)(x)
-        rcx = RegConcatLayer(reg=self.last_reg)(rcx)
-
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5, :])
-        # print()
-
-        x = self.pool(x)
-        rcx = self.pool(rcx)
-
-        # print(x.shape)
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5, :])
-        # print()
-
-        x = self.flattener(x)
-        rcx = self.flattener(rcx)
-
-        # print(x.numpy()[0, :5])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5])
-        # print()
-
-        outputs = self.dense(x)
-        rcout = self.dense(rcx)
-
-        # print(outputs.shape)
-        # print(outputs.numpy()[0, :5])
-        # print('reversed')
-        # print(rcout.numpy()[0, :5])
-        # print()
-        return outputs
 
 
 if __name__ == '__main__':
