@@ -135,6 +135,7 @@ class RegToIrrepConv(torch.nn.Module):
                     kernel = center_kernel
         else:
             kernel = torch.cat((self.left_kernel, right_kernel), dim=2)
+
         outputs = torch.nn.functional.conv1d(inputs,
                                              kernel,
                                              padding=self.padding,
@@ -702,7 +703,7 @@ class ToKmerLayer(torch.nn.Module):
                                                  self.kernel,
                                                  padding=0)
         outputs = outputs >= self.k
-        outputs = outputs.int()
+        outputs = outputs.int().double()
         return outputs
 
 
