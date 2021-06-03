@@ -7,10 +7,17 @@ from keras.layers import Layer
 import keras.layers as kl
 import numpy as np
 
+"""
+    The reg_in, reg_out arguments should be understood as the number of cycles.
+    This correspond to half the input dimension (so for the input, we have 4 nucleotides, so reg=2)
+
+    The a_n are of type +1, the b_n of type -1
+"""
+
 
 class RegToRegConv(Layer):
     """
-    Mapping from one reg layer to another
+    Mapping from one reg layer to another.
     """
 
     def __init__(self, reg_in, reg_out, kernel_size,
@@ -87,7 +94,7 @@ class RegToRegConv(Layer):
 
 class RegToIrrepConv(Layer):
     """
-    Mapping from one irrep layer to another
+    Mapping from one regular layer to an irrep one
     """
 
     def __init__(self, reg_in, a_out, b_out, kernel_size,
@@ -193,7 +200,7 @@ class RegToIrrepConv(Layer):
 
 class IrrepToRegConv(Layer):
     """
-    Mapping from one irrep layer to another
+    Mapping from one irrep layer to a regular type one
     """
 
     def __init__(self, reg_out, a_in, b_in, kernel_size,
@@ -511,7 +518,7 @@ class IrrepToIrrepConv(Layer):
 
 class IrrepActivationLayer(Layer):
     """
-    BN layer for a_n, b_n feature map
+    Activation layer for a_n, b_n feature map
     """
 
     def __init__(self, a, b, placeholder=False, **kwargs):
@@ -806,9 +813,34 @@ class IrrepBatchNorm(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class RegConcatLayer(Layer):
+    """
+    Concatenation layer to average both strands outputs for a regular feature map
+    """
+
+    def __init__(self, reg, **kwargs):
+        super(RegConcatLayer, self).__init__(**kwargs)
+        self.reg = reg
+
+    def call(self, inputs, **kwargs):
+        # print('a', inputs[:, :, :self.reg][0, :5, :])
+        # print('b', inputs[:, :, self.reg:][0, :5, :])
+        # print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
+        outputs = (inputs[:, :, :self.reg] + inputs[:, :, self.reg:][:, ::-1, ::-1]) / 2
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
+
+    def get_config(self):
+        config = {'reg': self.reg}
+        base_config = super(RegConcatLayer, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class IrrepConcatLayer(Layer):
     """
-    Concatenation layer to average both strands outputs
+    Concatenation layer to average both strands outputs for an irrep feature map
     """
 
     def __init__(self, a, b, **kwargs):
@@ -836,35 +868,17 @@ class IrrepConcatLayer(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class RegConcatLayer(Layer):
-    """
-    Concatenation layer to average both strands outputs
-    """
-
-    def __init__(self, reg, **kwargs):
-        super(RegConcatLayer, self).__init__(**kwargs)
-        self.reg = reg
-
-    def call(self, inputs, **kwargs):
-        # print('a', inputs[:, :, :self.reg][0, :5, :])
-        # print('b', inputs[:, :, self.reg:][0, :5, :])
-        # print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
-        outputs = (inputs[:, :, :self.reg] + inputs[:, :, self.reg:][:, ::-1, ::-1]) / 2
-        return outputs
-
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
-
-    def get_config(self):
-        config = {'reg': self.reg}
-        base_config = super(RegConcatLayer, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-
-
 class ToKmerLayer(Layer):
     """
-        to go from 1-hot strand in regular representation to another one
-        """
+    To go from a one hot encoding of single nucleotides to one using k-mers one hot encoding.
+    This new encoding still can be acted upon using regular representation : symmetric kmers have a symmetric indexing
+    To do so, we build an ordered one hot pattern matching kernel, and use thresholding to get the one hot encoding.
+
+    Careful : the RC palindromic kmers (TA for instance) are encoded twice,
+    resulting in some dimensions having two ones activated.
+    However this avoids us having to make special cases and using '+1' type feature maps and
+    enables the use of just using regular representation on the output
+    """
 
     def __init__(self, k=3, **kwargs):
         super(ToKmerLayer, self).__init__(**kwargs)
@@ -941,522 +955,6 @@ class ToKmerLayer(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class EquiNetBinary:
-
-    def __init__(self,
-                 filters=((2, 2), (2, 2), (2, 2), (1, 1)),
-                 kernel_sizes=(5, 5, 7, 7),
-                 pool_size=40,
-                 pool_length=20,
-                 out_size=1,
-                 placeholder_bn=False,
-                 kmers=1):
-        """
-        First map the regular representation to irrep setting
-        Then goes from one setting to another.
-        """
-
-        # assert len(filters) == len(kernel_sizes)
-        # self.input_dense = 1000
-        # successive_shrinking = (i - 1 for i in kernel_sizes)
-        # self.input_dense = 1000 - sum(successive_shrinking)
-
-        self.kmers = int(kmers)
-        self.to_kmer = ToKmerLayer(k=self.kmers)
-        reg_in = self.to_kmer.features // 2
-
-        # First mapping goes from the input to an irrep feature space
-        first_kernel_size = kernel_sizes[0]
-        first_a, first_b = filters[0]
-        self.last_a, self.last_b = filters[-1]
-        self.reg_irrep = RegToIrrepConv(reg_in=reg_in,
-                                        a_out=first_a,
-                                        b_out=first_b,
-                                        kernel_size=first_kernel_size)
-        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b, placeholder=placeholder_bn)
-        self.first_act = IrrepActivationLayer(a=first_a, b=first_b)
-
-        # Now add the intermediate layer : sequence of conv, BN, activation
-        self.irrep_layers = []
-        self.bn_layers = []
-        self.activation_layers = []
-        for i in range(1, len(filters)):
-            prev_a, prev_b = filters[i - 1]
-            next_a, next_b = filters[i]
-            self.irrep_layers.append(IrrepToIrrepConv(
-                a_in=prev_a,
-                b_in=prev_b,
-                a_out=next_a,
-                b_out=next_b,
-                kernel_size=kernel_sizes[i],
-            ))
-            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
-            # Don't add activation if it's the last layer
-            # placeholder = (i == len(filters) - 1)
-            # placeholder = True
-            self.activation_layers.append(IrrepActivationLayer(a=next_a,
-                                                               b=next_b))
-
-        self.concat = IrrepConcatLayer(a=self.last_a, b=self.last_b)
-        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
-        self.flattener = kl.Flatten()
-        self.dense = kl.Dense(out_size, activation='sigmoid')
-
-    def func_api_model(self):
-        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-
-        x = self.to_kmer(inputs)
-        x = self.reg_irrep(x)
-        x = self.first_bn(x)
-        x = self.first_act(x)
-
-        for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
-            x = irrep_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-        # Average two strands predictions, pool and go through Dense
-        x = self.concat(x)
-        x = self.pool(x)
-        x = self.flattener(x)
-        outputs = self.dense(x)
-        model = keras.Model(inputs, outputs)
-        return model
-
-    def eager_call(self, inputs):
-        rcinputs = inputs[:, ::-1, ::-1]
-
-        x = self.to_kmer(inputs)
-        x = self.reg_irrep(x)
-        x = self.first_bn(x)
-        x = self.first_act(x)
-
-        rcx = self.reg_irrep(rcinputs)
-        rcx = self.first_bn(rcx)
-        rcx = self.first_act(rcx)
-
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        # print()
-
-        for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
-            x = irrep_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-            rcx = irrep_layer(rcx)
-            rcx = bn_layer(rcx)
-            rcx = activation_layer(rcx)
-
-        # Print the beginning of both strands to see it adds up in concat
-        # print(x.shape)
-        # print(x.numpy()[0, :5, :])
-        # print('end')
-        # print(rcx.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        # print()
-
-        # Average two strands predictions
-        x = self.concat(x)
-        rcx = self.concat(rcx)
-
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5, :])
-        # print()
-
-        x = self.pool(x)
-        rcx = self.pool(rcx)
-
-        # print(x.shape)
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5, :])
-        # print()
-
-        x = self.flattener(x)
-        rcx = self.flattener(rcx)
-
-        # print(x.shape)
-        # print(x.numpy()[0, :5])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5])
-        # print()
-
-        outputs = self.dense(x)
-        rcout = self.dense(rcx)
-
-        # print(outputs.shape)
-        # print(outputs.numpy()[0, :5])
-        # print('reversed')
-        # print(rcout.numpy()[0, :5])
-        # print()
-        return outputs
-
-
-class CustomRCPS:
-
-    def __init__(self,
-                 filters=(16, 16, 16),
-                 kernel_sizes=(15, 14, 14),
-                 pool_size=40,
-                 pool_length=20,
-                 out_size=1,
-                 placeholder_bn=False,
-                 kmers=1):
-        """
-        First map the regular representation to irrep setting
-        Then goes from one setting to another.
-        """
-
-        self.kmers = int(kmers)
-        self.to_kmer = ToKmerLayer(k=self.kmers)
-        reg_in = self.to_kmer.features // 2
-        filters = [reg_in] + list(filters)
-
-        # Now add the intermediate layer : sequence of conv, BN, activation
-        self.reg_layers = []
-        self.bn_layers = []
-        self.activation_layers = []
-        for i in range(len(filters) - 1):
-            prev_reg = filters[i]
-            next_reg = filters[i + 1]
-            self.reg_layers.append(RegToRegConv(
-                reg_in=prev_reg,
-                reg_out=next_reg,
-                kernel_size=kernel_sizes[i],
-            ))
-            self.bn_layers.append(RegBatchNorm(reg_dim=next_reg, placeholder=placeholder_bn))
-            # Don't add activation if it's the last layer
-            placeholder = (i == len(filters) - 1)
-            self.activation_layers.append(kl.core.Activation("relu"))
-
-        self.concat = RegConcatLayer(reg=filters[-1])
-        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
-        self.flattener = kl.Flatten()
-        self.dense = kl.Dense(out_size, activation='sigmoid')
-
-    def func_api_model(self):
-        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-
-        x = self.to_kmer(inputs)
-
-        for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
-            x = reg_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-        # Average two strands predictions, pool and go through Dense
-        x = self.concat(x)
-        x = self.pool(x)
-        x = self.flattener(x)
-        outputs = self.dense(x)
-        model = keras.Model(inputs, outputs)
-        return model
-
-    def eager_call(self, inputs):
-        x = self.to_kmer(inputs)
-        for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
-            x = reg_layer(x)
-            x = bn_layer(x)
-            x = activation_layer(x)
-
-        # Average two strands predictions, pool and go through Dense
-        x = self.concat(x)
-        x = self.pool(x)
-        x = self.flattener(x)
-        outputs = self.dense(x)
-        model = keras.Model(inputs, outputs)
-        return model
-
-
-# BPNets
-
-# Loss Function
-def multinomial_nll(true_counts, logits):
-    """Compute the multinomial negative log-likelihood
-    Args:
-      true_counts: observed count values
-      logits: predicted logit values
-    """
-    counts_per_example = tf.reduce_sum(true_counts, axis=-1)
-    dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
-                                                  logits=logits)
-    return (-tf.reduce_sum(dist.log_prob(true_counts)) /
-            tf.cast((tf.shape(true_counts)[0]), tf.float32))
-
-
-class MultichannelMultinomialNLL(object):
-    def __init__(self, n=2):
-        self.__name__ = "MultichannelMultinomialNLL"
-        self.__class_name__ = "MultichannelMultinomialNLL"
-        self.n = n
-
-    def __call__(self, true_counts, logits):
-        total = 0
-        for i in range(self.n):
-            loss = multinomial_nll(true_counts[..., i], logits[..., i])
-            if i == 0:
-                total = loss
-            else:
-                total += loss
-        return total
-
-    def get_config(self):
-        return {"n": self.n}
-
-
-class EquiNetBP(Layer):
-    def __init__(self,
-                 dataset,
-                 input_seq_len=1346,
-                 c_task_weight=0,
-                 p_task_weight=1,
-                 filters=((64, 64), (64, 64), (64, 64), (64, 64), (64, 64), (64, 64), (64, 64)),
-                 kernel_sizes=(21, 3, 3, 3, 3, 3, 3, 75),
-                 outconv_kernel_size=75,
-                 weight_decay=0.01,
-                 optimizer='Adam',
-                 lr=0.001,
-                 kernel_initializer="glorot_uniform",
-                 seed=42,
-                 is_add=True,
-                 kmers=1,
-                 **kwargs):
-        super(EquiNetBP, self).__init__(**kwargs)
-
-        self.dataset = dataset
-        self.input_seq_len = input_seq_len
-        self.c_task_weight = c_task_weight
-        self.p_task_weight = p_task_weight
-        self.filters = filters
-        self.kernel_sizes = kernel_sizes
-        self.outconv_kernel_size = outconv_kernel_size
-        self.optimizer = optimizer
-        self.weight_decay = weight_decay
-        self.lr = lr
-        self.learning_rate = lr
-        self.kernel_initializer = kernel_initializer
-        self.seed = seed
-        self.is_add = is_add
-        self.n_dil_layers = len(filters) - 1
-
-        # Add k-mers, if k=1, it's just a placeholder
-        self.kmers = int(kmers)
-        self.to_kmer = ToKmerLayer(k=self.kmers)
-        self.conv1_kernel_size = kernel_sizes[0] - self.kmers + 1
-        reg_in = self.to_kmer.features // 2
-        first_a, first_b = filters[0]
-        self.first_conv = RegToIrrepConv(reg_in=reg_in,
-                                         a_out=first_a,
-                                         b_out=first_b,
-                                         kernel_size=self.conv1_kernel_size,
-                                         kernel_initializer=self.kernel_initializer,
-                                         padding='valid')
-        self.first_act = IrrepActivationLayer(a=first_a, b=first_b)
-
-        # Now add the intermediate layer : sequence of conv, activation
-        self.irrep_layers = []
-        self.activation_layers = []
-        self.croppings = []
-        for i in range(1, len(filters)):
-            prev_a, prev_b = filters[i - 1]
-            next_a, next_b = filters[i]
-            dilation_rate = 2 ** i
-            self.irrep_layers.append(IrrepToIrrepConv(
-                a_in=prev_a,
-                b_in=prev_b,
-                a_out=next_a,
-                b_out=next_b,
-                kernel_size=kernel_sizes[i],
-                dilatation=dilation_rate
-            ))
-            self.croppings.append((kernel_sizes[i] - 1) * dilation_rate)
-            # self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
-            self.activation_layers.append(IrrepActivationLayer(a=next_a, b=next_b))
-
-        self.last_a, self.last_b = filters[-1]
-        self.prebias = IrrepToRegConv(reg_out=1,
-                                      a_in=self.last_a,
-                                      b_in=self.last_b,
-                                      kernel_size=self.outconv_kernel_size,
-                                      kernel_initializer=self.kernel_initializer,
-                                      padding='valid')
-        self.last = RegToRegConv(reg_in=3,
-                                 reg_out=1,
-                                 kernel_size=1,
-                                 kernel_initializer=self.kernel_initializer,
-                                 padding='valid')
-
-        self.last_count = IrrepToRegConv(a_in=self.last_a + 2,
-                                         b_in=self.last_b,
-                                         reg_out=1,
-                                         kernel_size=1,
-                                         kernel_initializer=self.kernel_initializer)
-
-    def get_output_profile_len(self):
-        embedding_len = self.input_seq_len
-        embedding_len -= (self.conv1_kernel_size - 1)
-        for cropping in self.croppings:
-            embedding_len -= cropping
-        out_profile_len = embedding_len - (self.outconv_kernel_size - 1)
-        return out_profile_len
-
-    def trim_flanks_of_inputs(self, inputs, output_len, width_to_trim, filters):
-        layer = keras.layers.Lambda(
-            function=lambda x: x[:, int(0.5 * (width_to_trim)):-(width_to_trim - int(0.5 * (width_to_trim)))],
-            output_shape=(output_len, filters))(inputs)
-        return layer
-
-    def get_inputs(self):
-        out_pred_len = self.get_output_profile_len()
-
-        inp = kl.Input(shape=(self.input_seq_len, 4), name='sequence')
-        if self.dataset == "SPI1":
-            bias_counts_input = kl.Input(shape=(1,), name="control_logcount")
-            bias_profile_input = kl.Input(shape=(out_pred_len, 2),
-                                          name="control_profile")
-        else:
-            bias_counts_input = kl.Input(shape=(2,), name="patchcap.logcount")
-            # if working with raw counts, go from logcount->count
-            bias_profile_input = kl.Input(shape=(1000, 2),
-                                          name="patchcap.profile")
-        return inp, bias_counts_input, bias_profile_input
-
-    def get_names(self):
-        if self.dataset == "SPI1":
-            countouttaskname = "task0_logcount"
-            profileouttaskname = "task0_profile"
-        elif self.dataset == 'NANOG':
-            countouttaskname = "CHIPNexus.NANOG.logcount"
-            profileouttaskname = "CHIPNexus.NANOG.profile"
-        elif self.dataset == "OCT4":
-            countouttaskname = "CHIPNexus.OCT4.logcount"
-            profileouttaskname = "CHIPNexus.OCT4.profile"
-        elif self.dataset == "KLF4":
-            countouttaskname = "CHIPNexus.KLF4.logcount"
-            profileouttaskname = "CHIPNexus.KLF4.profile"
-        elif self.dataset == "SOX2":
-            countouttaskname = "CHIPNexus.SOX2.logcount"
-            profileouttaskname = "CHIPNexus.SOX2.profile"
-        else:
-            raise ValueError("The dataset asked does not exist")
-        return countouttaskname, profileouttaskname
-
-    def get_keras_model(self):
-        """
-        Make a first convolution, then use skip connections with dilatations (that shrink the input)
-        to get 'combined_conv'
-
-        Then create two heads :
-         - one is used to predict counts (and has a weight of zero in the loss)
-         - one is used to predict the profile
-        """
-        sequence_input, bias_counts_input, bias_profile_input = self.get_inputs()
-
-        kmer_inputs = self.to_kmer(sequence_input)
-        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
-        prev_layers = self.first_conv(kmer_inputs)
-
-        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
-                                                                         self.activation_layers,
-                                                                         self.croppings)):
-
-            conv_output = conv_layer(prev_layers)
-            conv_output = activation_layer(conv_output)
-            curr_layer_size = curr_layer_size - cropping
-
-            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
-                                                             output_len=curr_layer_size,
-                                                             width_to_trim=cropping,
-                                                             filters=self.filters[i][0] + self.filters[i][1])
-            if self.is_add:
-                prev_layers = kl.add([trimmed_prev_layers, conv_output])
-            else:
-                prev_layers = kl.average([trimmed_prev_layers, conv_output])
-
-        combined_conv = prev_layers
-
-        countouttaskname, profileouttaskname = self.get_names()
-
-        # ============== Placeholder for counts =================
-        count_out = kl.Lambda(lambda x: x, name=countouttaskname)(bias_counts_input)
-
-        # gap_combined_conv = kl.GlobalAvgPool1D()(combined_conv)
-        # stacked = kl.Reshape((1, -1))(kl.concatenate([
-        #     # concatenation of the bias layer both before and after
-        #     # is needed for rc symmetry
-        #     kl.Lambda(lambda x: x[:, ::-1])(bias_counts_input),
-        #     gap_combined_conv,
-        #     bias_counts_input], axis=-1))
-        # convout = self.last_count(stacked)
-        # count_out = kl.Reshape((-1,), name=countouttaskname)(convout)
-
-        # ============== Profile prediction ======================
-        profile_out_prebias = self.prebias(combined_conv)
-
-        # # concatenation of the bias layer both before and after is needed for rc symmetry
-        concatenated = kl.concatenate([kl.Lambda(lambda x: x[:, :, ::-1])(bias_profile_input),
-                                       profile_out_prebias,
-                                       bias_profile_input], axis=-1)
-        profile_out = self.last(concatenated)
-        profile_out = kl.Lambda(lambda x: x, name=profileouttaskname)(profile_out)
-
-        model = keras.models.Model(
-            inputs=[sequence_input, bias_counts_input, bias_profile_input],
-            outputs=[count_out, profile_out])
-        model.compile(keras.optimizers.Adam(lr=self.lr),
-                      loss=['mse', MultichannelMultinomialNLL(2)],
-                      loss_weights=[self.c_task_weight, self.p_task_weight])
-        # print(model.summary())
-        return model
-
-    def eager_call(self, sequence_input, bias_counts_input, bias_profile_input):
-        """
-        Testing only
-        """
-        kmer_inputs = self.to_kmer(sequence_input)
-        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
-        prev_layers = self.first_conv(kmer_inputs)
-
-        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
-                                                                         self.activation_layers,
-                                                                         self.croppings)):
-
-            conv_output = conv_layer(prev_layers)
-            conv_output = activation_layer(conv_output)
-            curr_layer_size = curr_layer_size - cropping
-
-            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
-                                                             output_len=curr_layer_size,
-                                                             width_to_trim=cropping,
-                                                             filters=self.filters[i][0] + self.filters[i][1])
-            if self.is_add:
-                prev_layers = kl.add([trimmed_prev_layers, conv_output])
-            else:
-                prev_layers = kl.average([trimmed_prev_layers, conv_output])
-
-        combined_conv = prev_layers
-
-        # Placeholder for counts
-        count_out = bias_counts_input
-
-        # Profile prediction
-        profile_out_prebias = self.prebias(combined_conv)
-
-        # concatenation of the bias layer both before and after is needed for rc symmetry
-        rc_profile_input = bias_profile_input[:, :, ::-1]
-        concatenated = K.concatenate([rc_profile_input,
-                                      profile_out_prebias,
-                                      bias_profile_input], axis=-1)
-
-        profile_out = self.last(concatenated)
-
-        return count_out, profile_out
-
-
 if __name__ == '__main__':
     pass
     import tensorflow as tf
@@ -1466,8 +964,6 @@ if __name__ == '__main__':
 
     if eager:
         tf.enable_eager_execution()
-
-    # from BPNetArchs import RcBPNetArch
 
     curr_seed = 42
     np.random.seed(curr_seed)
@@ -1607,65 +1103,12 @@ if __name__ == '__main__':
     bn_irrep = IrrepBatchNorm(a=a_1,
                               b=b_1)
 
-    # Now use these layers to build models : either use directly in eager mode or use the functional API for Keras use
-
-    # model = reg_irrep
-    # model = irrep_irrep
-    # model = reg_reg
-    # model = EquiNet()
-
     # Keras Style
     if not eager:
         pass
 
-        # CHECK EQUIVARIANCE of the rcps : to me it should not be equivariant
-        #   because of the maxpooling that is called too soon
-
-        # parameters = {
-        #     'filters': 16,
-        #     'input_length': 1000,
-        #     'pool_size': 40,
-        #     'strides': 20
-        # }
-        # model = BA.get_rc_model(parameters=parameters, is_weighted_sum=False)
-        #
-        # x = np.random.uniform(size=(5, 1000, 4))
-        # rcx = x[:, ::-1, ::-1]
-        # out1 = model.predict(x)
-        # print(out1)
-        # out2 = model.predict(rcx)
-        # print(out2)
-
-        # from keras_genomics.layers import RevCompConv1D
-        # model = RevCompConv1D(3,10)
-        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        # outputs = reg_irrep(inputs)
-        # outputs = ActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
-
         # TEST LAYERS OF THE MODELS
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-
-        # FIRST MODEL
-        # generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        # val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        # outputs = reg_irrep(inputs)
-        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
-        # model.summary()
-
-        # K-MERS
-        # to_kmer = ToKmerLayer(k=3)
-        # new_features = to_kmer.features
-        # reg_irrep_kmers = RegToIrrepConv(reg_in=new_features // 2,
-        #                                  a_out=a_1,
-        #                                  b_out=b_1,
-        #                                  kernel_size=8)
-        # generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 2 - 7, eager=eager)
-        # kmers = to_kmer(inputs)
-        # outputs = reg_irrep_kmers(kmers)
-        # model = keras.Model(inputs, outputs)
 
         # BatchNorm
         generator = Generator(outlen=1000 - 7 - 7 - 7, outfeat=3)
@@ -1676,16 +1119,7 @@ if __name__ == '__main__':
         outputs = reg_irrep(outputs)
         outputs = IrrepBatchNorm(a_1, b_1)(outputs)
         outputs = irrep_irrep(outputs)
-
-        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
         model = keras.Model(inputs, outputs)
-        # model.summary()
-        # model = EquiNetBinary(placeholder_bn=False).func_api_model()
-
-        # FULL MODEL
-        # generator = Generator(binary=True, eager=eager)
-        # val_generator = Generator(binary=True, eager=eager)
-        # model = EquiNetBinary(placeholder_bn=False).func_api_model()
         # model.summary()
 
         model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="mse", metrics=["accuracy"])
@@ -1694,146 +1128,15 @@ if __name__ == '__main__':
                             validation_steps=10,
                             epochs=3)
 
-        # x = np.random.uniform(size=(1, 1000, 4))
-        # out1 = model.predict(x)
-        # print(out1)
-
-        # ========= BPNets ===========
-
-        # generator = Generator(outfeat=4, outlen=985, eager=eager)
-        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        # outputs = reg_irrep(inputs)
-        # outputs = irrep_reg(outputs)
-        # model = keras.Model(inputs, outputs)
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-        #               loss="binary_crossentropy",
-        #               metrics=["accuracy"])
-        # model.fit_generator(generator)
-
-        # PARAMETERS = {
-        #     'dataset': 'SOX2',
-        #     'input_seq_len': 1346,
-        #     'c_task_weight': 0,
-        #     'p_task_weight': 1,
-        #     'filters': 64,
-        #     'n_dil_layers': 6,
-        #     'conv1_kernel_size': 21,
-        #     'dil_kernel_size': 3,
-        #     'outconv_kernel_size': 75,
-        #     'optimizer': 'Adam',
-        #     'weight_decay': 0.01,
-        #     'lr': 0.001,
-        #     'size': 100,
-        #     'kernel_initializer': "glorot_uniform",
-        #     'seed': 42
-        # }
-        # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
-        # print(rc_model.summary())
-        # rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
-        # print(rc_model.summary())
-        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, length=3)
-        # rc_model.fit_generator(generator)
-
-        # MODEL SAVING AND LOADING
-        # model_name = 'toto.p'
-        # rc_model.save(model_name)
-        # from keras.models import load_model
-        # import keras.losses
-        # keras.losses.MultichannelMultinomialNLL = MultichannelMultinomialNLL
-        # equilayers = {'RegToRegConv': RegToRegConv,
-        #               'RegToIrrepConv': RegToIrrepConv,
-        #               'IrrepToRegConv': IrrepToRegConv,
-        #               'IrrepToIrrepConv': IrrepToIrrepConv,
-        #               'IrrepActivationLayer': IrrepActivationLayer,
-        #               'RegBatchNorm': RegBatchNorm,
-        #               'IrrepBatchNorm': IrrepBatchNorm,
-        #               'IrrepConcatLayer': IrrepConcatLayer,
-        #               'RegConcatLayer': RegConcatLayer,
-        #               'loss': MultichannelMultinomialNLL,
-        #               'ToKmerLayer': ToKmerLayer}
-        # model = load_model(model_name, custom_objects=equilayers)
-        #
-        # # print(model.to_kmer.kernel)
-        # inputs_1 = np.random.uniform(size=(2, 1346, 4))
-        # inputs_2 = np.random.uniform(size=(2, 2))
-        # inputs_3 = np.random.uniform(size=(2, 1000, 2))
-        # inputs = {'sequence': inputs_1,
-        #           'patchcap.logcount': inputs_2,
-        #           'patchcap.profile': inputs_3}
-        # out1 = model.predict(inputs)
-        # print(out1)
-
     if eager:
         # For random one hot of size (2,100,4)
-        x = random_one_hot(size=(2,100), return_tf=True)
+        x = random_one_hot(size=(2, 100), return_tf=True)
 
         tokmer = ToKmerLayer(4)
         kmer_x = tokmer(x)
-
-        # x2 = x[:, ::-1, ::-1]
-        # rc_kmer_x = tokmer(x2)
-        # flipped_rc = rc_kmer_x[:, ::-1, ::-1]
-
         np_kmer = kmer_x.numpy()
         # Should be full ones with a few 2 because of palindromic representation
         print(np_kmer.sum(axis=2))
-
-
-        # print(np_kmer.sum(axis=1).mean(axis=0))
-
-        # print(kmer_x[0,0])
-        # print(flipped_rc[0])
-
-        # print('without BN')
-        # out1 = RCNetBinary(placeholder_bn=False).eager_call(inputs)
-        # out1 = EquiNetBinary(placeholder_bn=False).eager_call(inputs)
-        # outputs = reg_irrep(inputs)
-        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-
-        # outputs = reg_reg(x)
-        # outputs = RegBatchNorm(reg_dim=reg_out)(inputs)
-        #
-        # outputs = reg_irrep(inputs)
-        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        # outputs = irrep_irrep(outputs)
-
-        # print(outputs[0, :5, :].numpy())
-        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
-
-        # print()
-        # print('with BN')
-        # out2 = RCNetBinary(placeholder_bn=False).eager_call(inputs)
-        # out2 = EquiNetBinary(placeholder_bn=False).eager_call(inputs)
-        # print(x)
-        # x = reg_irrep(inputs)
-        # x = bn_irrep(x)
-        # x = tf.math.reduce_mean(x, axis=(1,2))
-        # out1 = reg_irrep(x)
-        # out1 = irrep_reg(out1)
-        # out1 = bn_irrep(out1)
-        # out2 = reg_irrep(x2)
-        # out2 = irrep_reg(out2)
-        # out2 = bn_irrep(out2)
-        # print(out1[0, :5, :].numpy())
-        # out1 = ActivationLayer(a_1, b_1)(out1)
-        # out2 = ActivationLayer(a_1, b_1)(out2)
-        #
-        # print(out1[0, :5, :].numpy())
-        # print('reversed')
-        # print(out2[0, -5:, :].numpy()[::-1])
-        # #
-        # x = tf.random.uniform((1, 1000, 4))
-        # x2 = x[:, ::-1, ::-1]
-        # out1 = model(x)
-        # out2 = model(x2)
-        # print(out1.numpy())
-        # print('reversed')
-        # print(out2.numpy()[::-1])
-
-        # generator = BPNGenerator(inlen=1346, outfeat=128, outlen=1000, eager=eager, bs=2)
-        # inputs = next(iter(generator))
-        # a, b, c = inputs[0].values()
-        # rc_model = EquiNetBP(dataset='SOX2')
 
         class testmodel(keras.Model):
             def __init__(self):
@@ -1865,21 +1168,6 @@ if __name__ == '__main__':
             def compute_output_shape(self, input_shape):
                 return None
 
-        # epochs_to_train_for = 10
-        # model = testmodel()
-        # model = rc_model
-        # optimizer = tf.keras.optimizers.Adam()
-
-        # for epoch in range(epochs_to_train_for):
-        #     for batch_idx, dicts_data in enumerate(generator):
-        #         ((a, b, c), (out_count, out_profile)) = dicts_data[0].values(), dicts_data[1].values()
-        #         with tf.GradientTape() as tape:
-        #             count, profile = model.eager_call(a, b, c)
-        #             loss = tf.reduce_mean(tf.keras.losses.MSE(out_profile, profile))
-        #             grads = tape.gradient(loss, model.trainable_weights)
-        #
-        #         optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        #         print(loss.numpy().item())
 
         model = testmodel()
         optimizer = tf.keras.optimizers.Adam()

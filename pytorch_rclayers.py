@@ -1,6 +1,13 @@
 import numpy as np
 import torch
 
+"""
+    The reg_in, reg_out arguments should be understood as the number of cycles.
+    This correspond to half the input dimension (so for the input, we have 4 nucleotides, so reg=2)
+
+    The a_n are of type +1, the b_n of type -1
+"""
+
 
 def create_xavier_convparameter(shape):
     """
@@ -598,9 +605,23 @@ class IrrepBatchNorm(torch.nn.Module):
             return test_outputs
 
 
+class RegConcatLayer(torch.nn.Module):
+    """
+    Concatenation layer to average both strands outputs for a regular feature map
+    """
+
+    def __init__(self, reg):
+        super(RegConcatLayer, self).__init__()
+        self.reg = reg
+
+    def forward(self, inputs):
+        outputs = (inputs[:, :self.reg, :] + torch.flip(inputs[:, self.reg:, :], [1, 2])) / 2
+        return outputs
+
+
 class IrrepConcatLayer(torch.nn.Module):
     """
-    Concatenation layer to average both strands outputs
+    Concatenation layer to average both strands outputs for an irrep feature map
     """
 
     def __init__(self, a, b):
@@ -619,20 +640,6 @@ class IrrepConcatLayer(torch.nn.Module):
             else:
                 return b_outputs
         return a_outputs
-
-
-class RegConcatLayer(torch.nn.Module):
-    """
-    Concatenation layer to average both strands outputs
-    """
-
-    def __init__(self, reg):
-        super(RegConcatLayer, self).__init__()
-        self.reg = reg
-
-    def forward(self, inputs):
-        outputs = (inputs[:, :self.reg, :] + torch.flip(inputs[:, self.reg:, :], [1, 2])) / 2
-        return outputs
 
 
 class ToKmerLayer(torch.nn.Module):
