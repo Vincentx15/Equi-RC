@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch import nn
 
 """
     The reg_in, reg_out arguments should be understood as the number of cycles.
@@ -15,7 +16,7 @@ def create_xavier_convparameter(shape):
     :param shape:
     :return:
     """
-    tensor = torch.zeros(size=shape, dtype=torch.double)
+    tensor = torch.zeros(size=shape, dtype=torch.float32)
     torch.nn.init.xavier_normal_(tensor, gain=1.0)
     return torch.nn.Parameter(tensor)
 
@@ -338,13 +339,13 @@ class IrrepToIrrepConv(torch.nn.Module):
             if self.b_in == 0:
                 # going from as -> bs
                 if self.a_out == 0:
-                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
+                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float32)
                 # going from as -> as
                 elif self.b_out == 0:
                     center_kernel = self.top_left
                 # going from as -> abs
                 else:
-                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
+                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float32)
                     center_kernel = torch.cat((self.top_left, bottom_left), dim=0)
 
             # We only have the right part
@@ -355,10 +356,10 @@ class IrrepToIrrepConv(torch.nn.Module):
                     center_kernel = self.bottom_right
                 # going from bs -> as
                 elif self.b_out == 0:
-                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
+                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float32)
                 # going from bs -> abs
                 else:
-                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
+                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float32)
                     center_kernel = torch.cat((top_right, self.bottom_right), dim=0)
 
             # in <=> left/right, out <=> top/bottom
@@ -371,10 +372,10 @@ class IrrepToIrrepConv(torch.nn.Module):
                     center_kernel = self.bottom_right
                 # going from as -> bs
                 elif self.b_in == 0:
-                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
+                    center_kernel = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float32)
                 # going from abs -> bs
                 else:
-                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
+                    bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float32)
                     center_kernel = torch.cat((bottom_left, self.bottom_right), dim=1)
 
             # We only have the top
@@ -382,19 +383,19 @@ class IrrepToIrrepConv(torch.nn.Module):
             elif self.b_out == 0:
                 # going from bs -> as
                 if self.a_in == 0:
-                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
+                    center_kernel = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float32)
                 # going from as -> as
                 elif self.b_in == 0:
                     center_kernel = self.top_left
                 # going from abs -> as
                 else:
-                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
+                    top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float32)
                     center_kernel = torch.cat((self.top_left, top_right), dim=1)
 
             else:
                 # For the kernel to be anti-symmetric, we need to have zeros on the anti-symmetric parts:
-                bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float64)
-                top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float64)
+                bottom_left = torch.zeros(size=(self.b_out, self.a_in, 1), dtype=torch.float32)
+                top_right = torch.zeros(size=(self.a_out, self.b_in, 1), dtype=torch.float32)
                 left = torch.cat((self.top_left, bottom_left), dim=0)
                 right = torch.cat((top_right, self.bottom_right), dim=0)
                 center_kernel = torch.cat((left, right), dim=1)
@@ -455,8 +456,8 @@ class RegBatchNorm(torch.nn.Module):
             self.passed = 0
             self.mu = torch.nn.Parameter(torch.zeros(size=(1, reg_dim, 1)))
             self.sigma = torch.nn.Parameter(torch.ones(size=(1, reg_dim, 1)))
-            self.running_mu = torch.zeros(size=(1, reg_dim, 1), requires_grad=False)
-            self.running_sigma = torch.ones(size=(1, reg_dim, 1), requires_grad=False)
+            self.register_buffer('running_mu', torch.zeros(size=(1, reg_dim, 1), requires_grad=False))
+            self.register_buffer('running_sigma', torch.zeros(size=(1, reg_dim, 1), requires_grad=False))
 
     def forward(self, inputs):
         if self.placeholder:
@@ -522,11 +523,12 @@ class IrrepBatchNorm(torch.nn.Module):
             if a > 0:
                 self.mu_a = torch.nn.Parameter(torch.zeros(size=(1, a, 1)))
                 self.sigma_a = torch.nn.Parameter(torch.ones(size=(1, a, 1)))
-                self.running_mu_a = torch.zeros(size=(1, a, 1), requires_grad=False)
-                self.running_sigma_a = torch.ones(size=(1, a, 1), requires_grad=False)
+
+                self.register_buffer('running_mu_a', torch.zeros(size=(1, a, 1), requires_grad=False))
+                self.register_buffer('running_sigma_a', torch.zeros(size=(1, a, 1), requires_grad=False))
             if b > 0:
                 self.sigma_b = torch.nn.Parameter(torch.ones(size=(1, b, 1)))
-                self.running_sigma_b = torch.ones(size=(1, b, 1), requires_grad=False)
+                self.register_buffer('running_sigma_b', torch.zeros(size=(1, b, 1), requires_grad=False))
 
     def forward(self, inputs):
         if self.placeholder:
@@ -535,7 +537,7 @@ class IrrepBatchNorm(torch.nn.Module):
         a = inputs.shape
         batch_size = a[0]
         length = a[2]
-        division_over = torch.tensor(batch_size * length, dtype=torch.float64)
+        division_over = torch.tensor(batch_size * length, dtype=torch.float32)
 
         if self.training:
             # We have to compute statistics and update the running means if in train
@@ -698,7 +700,7 @@ class ToKmerLayer(torch.nn.Module):
         # n_kmers = 4**k for odd k and 4**k + 4**(k//2) for even because we repeat palindromic units
         all_kernels = list(all_kernels)
         kernel = np.stack(all_kernels, axis=0)
-        kernel = torch.from_numpy(kernel)
+        kernel = torch.from_numpy(kernel).float()
         kernel.requires_grad = False
         return kernel
 
@@ -710,7 +712,70 @@ class ToKmerLayer(torch.nn.Module):
                                                  self.kernel,
                                                  padding=0)
         outputs = outputs >= self.k
-        outputs = outputs.int().double()
+        outputs = outputs.int().float()
+        return outputs
+
+
+class CustomRCPS(nn.Module):
+
+    def __init__(self,
+                 filters=(16, 16, 16),
+                 kernel_sizes=(15, 14, 14),
+                 pool_size=40,
+                 pool_strides=20,
+                 out_size=1,
+                 placeholder_bn=False,
+                 kmers=1):
+        """
+        This is an example of use of the equivariant layers :
+
+        The network takes as inputs windows of 1000 base pairs one hot encoded and outputs a binary prediction
+        The architecture follows the paper of Avanti Shrikumar : Reverse Complement Parameter Sharing
+        We reimplement everything with equivariant layers and add the possibility to start the encoding with
+        a K-Mer encoding layer.
+        """
+        super(CustomRCPS, self).__init__()
+
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        reg_in = self.to_kmer.features // 2
+        filters = [reg_in] + list(filters)
+
+        # Now add the intermediate layer : sequence of conv, BN, activation
+        self.reg_layers = nn.ModuleList()
+        self.bn_layers = nn.ModuleList()
+        self.activation_layers = nn.ModuleList()
+        for i in range(len(filters) - 1):
+            prev_reg = filters[i]
+            next_reg = filters[i + 1]
+            self.reg_layers.append(RegToRegConv(
+                reg_in=prev_reg,
+                reg_out=next_reg,
+                kernel_size=kernel_sizes[i],
+            ))
+            self.bn_layers.append(RegBatchNorm(reg_dim=next_reg, placeholder=placeholder_bn))
+            # Don't add activation if it's the last layer
+            placeholder = (i == len(filters) - 1)
+            self.activation_layers.append(nn.ReLU())
+
+        self.concat = RegConcatLayer(reg=filters[-1])
+        self.pool = nn.MaxPool1d(kernel_size=pool_size, stride=pool_strides)
+        self.flattener = nn.Flatten()
+        self.dense = nn.Linear(in_features=752, out_features=out_size)
+
+    def forward(self, inputs):
+        x = self.to_kmer(inputs)
+        for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
+            x = reg_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+        # Average two strands predictions, pool and go through Dense
+        x = self.concat(x)
+        x = self.pool(x)
+        x = self.flattener(x)
+        x = self.dense(x)
+        outputs = torch.sigmoid(x)
         return outputs
 
 
@@ -751,7 +816,7 @@ def random_one_hot(size=(2, 100)):
     bs, len = size
     numel = bs * len
     randints_np = np.random.randint(0, 3, size=numel)
-    one_hot_np = np.eye(4)[randints_np]
+    one_hot_np = np.eye(4, dtype=np.float32)[randints_np]
     one_hot_np = np.reshape(one_hot_np, newshape=(bs, len, 4))
     one_hot_torch = torch.from_numpy(one_hot_np)
     one_hot_torch = torch.transpose(one_hot_torch, 1, 2)
@@ -785,34 +850,34 @@ def test_layers(a_1=2,
     with torch.no_grad():
         out = regreg(x)
         rc_out = regreg(rcx)
-        assert torch.allclose(out, reg_action(rc_out))
+        assert torch.allclose(out, reg_action(rc_out), atol=1e-5)
 
         concat_reg_out = concat_reg(out)
         rc_concat_reg_out = concat_reg(rc_out)
-        assert torch.allclose(concat_reg_out, rc_concat_reg_out)
+        assert torch.allclose(concat_reg_out, rc_concat_reg_out, atol=1e-5)
 
         out = regirrep(out)
         rc_out = regirrep(rc_out)
-        assert torch.allclose(out[:, :a_1], a_action(rc_out[:, :a_1]))
-        assert torch.allclose(out[:, a_1:], b_action(rc_out[:, a_1:]))
+        assert torch.allclose(out[:, :a_1], a_action(rc_out[:, :a_1]), atol=1e-5)
+        assert torch.allclose(out[:, a_1:], b_action(rc_out[:, a_1:]), atol=1e-5)
 
         out = irrepirrep(out)
         rc_out = irrepirrep(rc_out)
-        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]))
-        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]))
+        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]), atol=1e-5)
+        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]), atol=1e-5)
 
         out = activ(out)
         rc_out = activ(rc_out)
-        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]))
-        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]))
+        assert torch.allclose(out[:, :a_2], a_action(rc_out[:, :a_2]), atol=1e-5)
+        assert torch.allclose(out[:, a_2:], b_action(rc_out[:, a_2:]), atol=1e-5)
 
         concat_irrep_out = concat_irrep(out)
         rc_concat_irrep_out = concat_irrep(rc_out)
-        assert torch.allclose(concat_irrep_out, rc_concat_irrep_out)
+        assert torch.allclose(concat_irrep_out, rc_concat_irrep_out, atol=1e-5)
 
         out = irrepreg(out)
         rc_out = irrepreg(rc_out)
-        assert torch.allclose(out, reg_action(rc_out))
+        assert torch.allclose(out, reg_action(rc_out), atol=1e-5)
 
 
 def test_kmers(k=2):
@@ -827,7 +892,7 @@ def test_kmers(k=2):
     kmer_x = tokmer(x)
     kmer_rcx = tokmer(rcx)
     # Should be full ones with a few 2 because of palindromic representation.
-    assert torch.allclose(kmer_x.int(), kmer_x)
+    assert torch.allclose(kmer_x.int().float(), kmer_x)
     assert torch.any(torch.logical_and(3 > kmer_x.sum(axis=1), 0 < kmer_x.sum(axis=1)))
     # The flipped version should revert correctly
     assert torch.allclose(kmer_x, reg_action(kmer_rcx))
