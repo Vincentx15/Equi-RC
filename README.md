@@ -1,7 +1,11 @@
+# Under (re-) construction
+I am constructing a more detailed documentation explaining the essentials of the paper, the main classes as well as a practical hands-on on how to use these layers.
+I plan to deploy it very soon. If you are interested and want to contact me, do not hesitate to send me an email at vincent.mallet96@gmail.com
+
 # Equi-RC
 Equivariant layers for RC-complement symmetry in DNA sequence data
 
-This is a repository that implements the layers as described in "Reverse-Complement Equivariant Networks for DNA Sequences" in Keras and Pytorch.
+This is a repository that implements the layers as described in "Reverse-Complement Equivariant Networks for DNA Sequences" [link to paper](https://proceedings.neurips.cc/paper/2021/hash/706608cfdbcc1886bb7eea5513f90133-Abstract.html) in Keras and Pytorch.
 The simplest way to use it is to include the appropriate standalone python script in your code.
 
 ## Setup and notes
