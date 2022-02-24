@@ -103,8 +103,8 @@ If you want to cite this tool, please use :
 @article{mallet2021reverse,
   title={Reverse-Complement Equivariant Networks for DNA Sequences},
   author={Mallet, Vincent and Vert, Jean-Philippe},
-  journal={bioRxiv},
-  year={2021},
-  publisher={Cold Spring Harbor Laboratory}
+  journal={Advances in Neural Information Processing Systems},
+  volume={34},
+  year={2021}
 }
 ```
